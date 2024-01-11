@@ -19,145 +19,180 @@ package org.apache.maven.shared.dependency.analyzer;
  * under the License.
  */
 
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
+import org.junit.Before;
+import org.junit.Test;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.jar.JarOutputStream;
+import java.util.zip.ZipEntry;
 
-import org.codehaus.plexus.util.FileUtils;
-import org.jmock.Mock;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
 /**
  * Tests <code>ClassFileVisitorUtils</code>.
  * 
  * @author <a href="mailto:markhobson@gmail.com">Mark Hobson</a>
- * @version $Id$
  * @see ClassFileVisitorUtils
  */
 public class ClassFileVisitorUtilsTest
-    extends AbstractFileTest
 {
-    // tests ------------------------------------------------------------------
+    private MockVisitor visitor;
 
-    public void testAcceptJar()
-        throws IOException
+    private static class MockVisitor implements ClassFileVisitor
     {
-        File file = createJar();
-        JarOutputStream out = new JarOutputStream( new FileOutputStream( file ) );
-        writeEntry( out, "a/b/c.class", "class a.b.c" );
-        writeEntry( out, "x/y/z.class", "class x.y.z" );
-        out.close();
+        final List<String> classNames = new ArrayList<>();
+        final List<String> data = new ArrayList<>();
 
-        Mock mock = mock( ClassFileVisitor.class );
-        expectVisitClass( mock, "a.b.c", "class a.b.c" );
-        expectVisitClass( mock, "x.y.z", "class x.y.z" );
-
-        ClassFileVisitorUtils.accept( file.toURI().toURL(), (ClassFileVisitor) mock.proxy() );
-
-        mock.verify();
+        @Override
+        public void visitClass( String className, InputStream in )
+        {
+            classNames.add( className );
+            try
+            {
+                List<String> lines = IOUtils.readLines( in, StandardCharsets.UTF_8 );
+                data.addAll( lines );
+            }
+            catch ( IOException ex )
+            {
+                throw new RuntimeException( ex );
+            }
+        }
     }
 
-    public void testAcceptJarWithNonClassEntry()
-        throws IOException
+    @Before
+    public void setUp()
     {
-        File file = createJar();
-        JarOutputStream out = new JarOutputStream( new FileOutputStream( file ) );
-        writeEntry( out, "a/b/c.jpg", "jpeg a.b.c" );
-        out.close();
-
-        Mock mock = mock( ClassFileVisitor.class );
-
-        ClassFileVisitorUtils.accept( file.toURI().toURL(), (ClassFileVisitor) mock.proxy() );
-
-        mock.verify();
+        visitor = new MockVisitor();
     }
 
-    public void testAcceptDir()
-        throws IOException
+    @Test
+    public void testAcceptJar() throws IOException
     {
-        File dir = createDir();
+        File file = File.createTempFile( "test", ".jar" );
+        file.deleteOnExit();
 
-        File abDir = mkdirs( dir, "a/b" );
-        createFile( abDir, "c.class", "class a.b.c" );
+        try ( JarOutputStream out = new JarOutputStream( new FileOutputStream( file ) ) )
+        {
+            addZipEntry( out, "a/b/c.class", "class a.b.c" );
+            addZipEntry( out, "x/y/z.class", "class x.y.z" );
+        }
 
-        File xyDir = mkdirs( dir, "x/y" );
-        createFile( xyDir, "z.class", "class x.y.z" );
+        ClassFileVisitorUtils.accept( file.toURI().toURL(), visitor );
 
-        Mock mock = mock( ClassFileVisitor.class );
-        expectVisitClass( mock, "a.b.c", "class a.b.c" );
-        expectVisitClass( mock, "x.y.z", "class x.y.z" );
-
-        ClassFileVisitorUtils.accept( dir.toURI().toURL(), (ClassFileVisitor) mock.proxy() );
-
-        FileUtils.deleteDirectory( dir );
-
-        mock.verify();
+        assertThat( visitor.classNames ).contains( "a.b.c" );
+        assertThat( visitor.classNames ).contains( "x.y.z" );
+        assertThat( visitor.data ).contains( "class a.b.c" );
+        assertThat( visitor.data ).contains( "class x.y.z" );
     }
 
-    public void testAcceptDirWithNonClassFile()
-        throws IOException
+    @Test
+    public void testAcceptJarWithNonClassEntry() throws IOException
     {
-        File dir = createDir();
+        File file = File.createTempFile( "test", ".jar" );
+        file.deleteOnExit();
 
-        File abDir = mkdirs( dir, "a/b" );
-        createFile( abDir, "c.jpg", "jpeg a.b.c" );
+        try ( JarOutputStream out = new JarOutputStream( new FileOutputStream( file ) ) )
+        {
+            addZipEntry( out, "a/b/c.jpg", "jpeg a.b.c" );
+        }
 
-        Mock mock = mock( ClassFileVisitor.class );
+        ClassFileVisitorUtils.accept( file.toURI().toURL(), visitor );
 
-        ClassFileVisitorUtils.accept( dir.toURI().toURL(), (ClassFileVisitor) mock.proxy() );
-
-        FileUtils.deleteDirectory( dir );
-
-        mock.verify();
+        assertThat( visitor.classNames ) .isEmpty();
     }
 
-    public void testAcceptWithFile()
-        throws IOException
+    @Test
+    public void testAcceptDir() throws IOException
+    {
+        Path dir = Files.createTempDirectory( "d-a-test" );
+
+        Path abDir = Files.createDirectories( dir.resolve( "a/b" ) );
+        writeToFile( abDir, "c.class", "class a.b.c" );
+
+        Path xyDir = Files.createDirectories( dir.resolve( "x/y" ) );
+        writeToFile( xyDir, "z.class", "class x.y.z" );
+
+        ClassFileVisitorUtils.accept( dir.toUri().toURL(), visitor );
+
+        FileUtils.deleteDirectory( dir.toFile() );
+
+        assertThat( visitor.classNames ).contains( "a.b.c" );
+        assertThat( visitor.classNames ).contains( "x.y.z" );
+        assertThat( visitor.data ).contains( "class a.b.c" );
+        assertThat( visitor.data ).contains( "class x.y.z" );
+    }
+
+    @Test
+    public void testAcceptDirWithNonClassFile() throws IOException
+    {
+        Path dir = Files.createTempDirectory( "d-a-test" );
+
+        Path abDir = Files.createDirectories( dir.resolve( "a/b" ) );
+        writeToFile( abDir, "c.jpg", "jpeg a.b.c" );
+
+        ClassFileVisitorUtils.accept( dir.toUri().toURL(), visitor );
+
+        FileUtils.deleteDirectory( dir.toFile() );
+
+        assertThat( visitor.classNames ).isEmpty();
+    }
+
+    @Test
+    public void testAcceptWithFile() throws IOException
     {
         File file = File.createTempFile( "test", ".class" );
         file.deleteOnExit();
-
-        Mock mock = mock( ClassFileVisitor.class );
 
         URL url = file.toURI().toURL();
 
         try
         {
-            ClassFileVisitorUtils.accept( url, (ClassFileVisitor) mock.proxy() );
+            ClassFileVisitorUtils.accept( url, visitor );
+            fail( "expected IllegalArgumentException" );
         }
         catch ( IllegalArgumentException exception )
         {
-            assertEquals( "Cannot accept visitor on URL: " + url, exception.getMessage() );
+            assertThat( exception ).hasMessage( "Cannot accept visitor on URL: " + url );
         }
     }
 
-    public void testAcceptWithUnsupportedScheme()
-        throws IOException
+    @Test
+    public void testAcceptWithUnsupportedScheme() throws IOException
     {
-        Mock mock = mock( ClassFileVisitor.class );
-
         URL url = new URL( "http://localhost/" );
 
         try
         {
-            ClassFileVisitorUtils.accept( url, (ClassFileVisitor) mock.proxy() );
+            ClassFileVisitorUtils.accept( url, visitor );
+            fail( "expected IllegalArgumentException" );
         }
         catch ( IllegalArgumentException exception )
         {
-            assertEquals( "Cannot accept visitor on URL: " + url, exception.getMessage() );
+            assertThat( exception ).hasMessage( "Cannot accept visitor on URL: " + url );
         }
     }
 
-    // private methods --------------------------------------------------------
-
-    private void expectVisitClass( Mock mock, String className, String data )
+    private void writeToFile( Path parent, String file, String data ) throws IOException
     {
-        mock.expects( atLeastOnce() ).method( "visitClass" ).with( eq( className ), in( data ) );
+        Files.write( parent.resolve( file ), data.getBytes( StandardCharsets.UTF_8 ) );
     }
 
-    private InputStreamConstraint in( String expected )
+    private void addZipEntry( JarOutputStream out, String fileName, String content ) throws IOException
     {
-        return new InputStreamConstraint( expected );
+        out.putNextEntry( new ZipEntry( fileName ) );
+        byte[] bytes = content.getBytes( StandardCharsets.UTF_8 );
+        out.write( bytes, 0, bytes.length );
     }
 }

@@ -19,32 +19,30 @@ package org.apache.maven.shared.dependency.analyzer;
  * under the License.
  */
 
-import junit.framework.TestCase;
+import org.junit.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Tests <code>ProjectDependencyAnalyzerException</code>.
  * 
  * @author <a href="mailto:markhobson@gmail.com">Mark Hobson</a>
- * @version $Id$
  * @see ProjectDependencyAnalyzerException
  */
-public class ProjectDependencyAnalyzerExceptionTest extends TestCase
+public class ProjectDependencyAnalyzerExceptionTest
 {
-    // tests ------------------------------------------------------------------
-
+    @Test
     public void testConstructor()
     {
-        ProjectDependencyAnalyzerException exception = new ProjectDependencyAnalyzerException( "a" );
-
-        assertEquals( "a", exception.getMessage() );
+        assertThat( new ProjectDependencyAnalyzerException( "a" ) ).hasMessage( "a" );
     }
 
+    @Test
     public void testConstructorWithThrowable()
     {
         Throwable throwable = new Exception();
         ProjectDependencyAnalyzerException exception = new ProjectDependencyAnalyzerException( "a", throwable );
 
-        assertEquals( "a", exception.getMessage() );
-        assertEquals( throwable, exception.getCause() );
+        assertThat( exception ).hasMessage( "a" ).hasCause( throwable );
     }
 }
