@@ -19,11 +19,16 @@ package org.apache.maven.shared.dependency.analyzer;
  * under the License.
  */
 
+import javax.inject.Inject;
+import javax.inject.Named;
+import javax.inject.Singleton;
+
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
 import java.util.Collections;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -34,36 +39,30 @@ import java.util.jar.JarFile;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.project.MavenProject;
-import org.codehaus.plexus.component.annotations.Component;
-import org.codehaus.plexus.component.annotations.Requirement;
 
 /**
+ * <p>DefaultProjectDependencyAnalyzer class.</p>
+ *
  * @author <a href="mailto:markhobson@gmail.com">Mark Hobson</a>
- * @version $Id$
  */
-@Component( role = ProjectDependencyAnalyzer.class )
+@Named
+@Singleton
 public class DefaultProjectDependencyAnalyzer
     implements ProjectDependencyAnalyzer
 {
-    // fields -----------------------------------------------------------------
-
     /**
      * ClassAnalyzer
      */
-    @Requirement
+    @Inject
     private ClassAnalyzer classAnalyzer;
 
     /**
      * DependencyAnalyzer
      */
-    @Requirement
+    @Inject
     private DependencyAnalyzer dependencyAnalyzer;
 
-    // ProjectDependencyAnalyzer methods --------------------------------------
-
-    /*
-     * @see org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalyzer#analyze(org.apache.maven.project.MavenProject)
-     */
+    /** {@inheritDoc} */
     public ProjectDependencyAnalysis analyze( MavenProject project )
         throws ProjectDependencyAnalyzerException
     {
@@ -71,23 +70,38 @@ public class DefaultProjectDependencyAnalyzer
         {
             Map<Artifact, Set<String>> artifactClassMap = buildArtifactClassMap( project );
 
-            Set<String> dependencyClasses = buildDependencyClasses( project );
+            Set<String> mainDependencyClasses = buildMainDependencyClasses( project );
+            Set<String> testDependencyClasses = buildTestDependencyClasses( project );
+
+            Set<String> dependencyClasses = new HashSet<>();
+            dependencyClasses.addAll( mainDependencyClasses );
+            dependencyClasses.addAll( testDependencyClasses );
+
+            Set<String> testOnlyDependencyClasses = buildTestOnlyDependencyClasses( mainDependencyClasses,
+                                                                                    testDependencyClasses );
+
+            Map<Artifact, Set<String>> usedArtifacts = buildUsedArtifacts( artifactClassMap, dependencyClasses );
+            Set<Artifact> mainUsedArtifacts = buildUsedArtifacts( artifactClassMap, mainDependencyClasses ).keySet();
+
+            Set<Artifact> testArtifacts = buildUsedArtifacts( artifactClassMap, testOnlyDependencyClasses ).keySet();
+            Set<Artifact> testOnlyArtifacts = removeAll( testArtifacts, mainUsedArtifacts );
 
             Set<Artifact> declaredArtifacts = buildDeclaredArtifacts( project );
+            Set<Artifact> usedDeclaredArtifacts = new LinkedHashSet<>( declaredArtifacts );
+            usedDeclaredArtifacts.retainAll( usedArtifacts.keySet() );
 
-            Set<Artifact> usedArtifacts = buildUsedArtifacts( artifactClassMap, dependencyClasses );
+            Map<Artifact, Set<String>> usedUndeclaredArtifactsWithClasses = new LinkedHashMap<>( usedArtifacts );
+            Set<Artifact> usedUndeclaredArtifacts = removeAll(
+                usedUndeclaredArtifactsWithClasses.keySet(), declaredArtifacts );
+            usedUndeclaredArtifactsWithClasses.keySet().retainAll( usedUndeclaredArtifacts );
 
-            Set<Artifact> usedDeclaredArtifacts = new LinkedHashSet<Artifact>( declaredArtifacts );
-            usedDeclaredArtifacts.retainAll( usedArtifacts );
+            Set<Artifact> unusedDeclaredArtifacts = new LinkedHashSet<>( declaredArtifacts );
+            unusedDeclaredArtifacts = removeAll( unusedDeclaredArtifacts, usedArtifacts.keySet() );
 
-            Set<Artifact> usedUndeclaredArtifacts = new LinkedHashSet<Artifact>( usedArtifacts );
-            usedUndeclaredArtifacts = removeAll( usedUndeclaredArtifacts, declaredArtifacts );
+            Set<Artifact> testArtifactsWithNonTestScope = getTestArtifactsWithNonTestScope( testOnlyArtifacts );
 
-            Set<Artifact> unusedDeclaredArtifacts = new LinkedHashSet<Artifact>( declaredArtifacts );
-            unusedDeclaredArtifacts = removeAll( unusedDeclaredArtifacts, usedArtifacts );
-
-            return new ProjectDependencyAnalysis( usedDeclaredArtifacts, usedUndeclaredArtifacts,
-                                                  unusedDeclaredArtifacts );
+            return new ProjectDependencyAnalysis( usedDeclaredArtifacts, usedUndeclaredArtifactsWithClasses,
+                                                  unusedDeclaredArtifacts, testArtifactsWithNonTestScope );
         }
         catch ( IOException exception )
         {
@@ -98,14 +112,14 @@ public class DefaultProjectDependencyAnalyzer
     /**
      * This method defines a new way to remove the artifacts by using the conflict id. We don't care about the version
      * here because there can be only 1 for a given artifact anyway.
-     * 
-     * @param start initial set
+     *
+     * @param start  initial set
      * @param remove set to exclude
      * @return set with remove excluded
      */
-    private Set<Artifact> removeAll( Set<Artifact> start, Set<Artifact> remove )
+    private static Set<Artifact> removeAll( Set<Artifact> start, Set<Artifact> remove )
     {
-        Set<Artifact> results = new LinkedHashSet<Artifact>( start.size() );
+        Set<Artifact> results = new LinkedHashSet<>( start.size() );
 
         for ( Artifact artifact : start )
         {
@@ -129,12 +143,26 @@ public class DefaultProjectDependencyAnalyzer
         return results;
     }
 
-    protected Map<Artifact, Set<String>> buildArtifactClassMap( MavenProject project )
+    private static Set<Artifact> getTestArtifactsWithNonTestScope( Set<Artifact> testOnlyArtifacts )
+    {
+        Set<Artifact> nonTestScopeArtifacts = new LinkedHashSet<>();
+
+        for ( Artifact artifact : testOnlyArtifacts )
+        {
+            if ( artifact.getScope().equals( "compile" ) )
+            {
+                nonTestScopeArtifacts.add( artifact );
+            }
+        }
+
+        return nonTestScopeArtifacts;
+    }
+
+    private Map<Artifact, Set<String>> buildArtifactClassMap( MavenProject project )
         throws IOException
     {
-        Map<Artifact, Set<String>> artifactClassMap = new LinkedHashMap<Artifact, Set<String>>();
+        Map<Artifact, Set<String>> artifactClassMap = new LinkedHashMap<>();
 
-        @SuppressWarnings( "unchecked" )
         Set<Artifact> dependencyArtifacts = project.getArtifacts();
 
         for ( Artifact artifact : dependencyArtifacts )
@@ -144,13 +172,12 @@ public class DefaultProjectDependencyAnalyzer
             if ( file != null && file.getName().endsWith( ".jar" ) )
             {
                 // optimized solution for the jar case
-                JarFile jarFile = new JarFile( file );
 
-                try
+                try ( JarFile jarFile = new JarFile( file ) )
                 {
                     Enumeration<JarEntry> jarEntries = jarFile.entries();
 
-                    Set<String> classes = new HashSet<String>();
+                    Set<String> classes = new HashSet<>();
 
                     while ( jarEntries.hasMoreElements() )
                     {
@@ -165,17 +192,6 @@ public class DefaultProjectDependencyAnalyzer
 
                     artifactClassMap.put( artifact, classes );
                 }
-                finally
-                {
-                    try
-                    {
-                        jarFile.close();
-                    }
-                    catch ( IOException ignore )
-                    {
-                        // ingore
-                    }
-                }
             }
             else if ( file != null && file.isDirectory() )
             {
@@ -189,18 +205,26 @@ public class DefaultProjectDependencyAnalyzer
         return artifactClassMap;
     }
 
-    protected Set<String> buildDependencyClasses( MavenProject project )
+    private static Set<String> buildTestOnlyDependencyClasses( Set<String> mainDependencyClasses,
+                                                               Set<String> testDependencyClasses )
+    {
+        Set<String> testOnlyDependencyClasses = new HashSet<>( testDependencyClasses );
+        testOnlyDependencyClasses.removeAll( mainDependencyClasses );
+        return testOnlyDependencyClasses;
+    }
+
+    private Set<String> buildMainDependencyClasses( MavenProject project )
         throws IOException
     {
-        Set<String> dependencyClasses = new HashSet<String>();
-
         String outputDirectory = project.getBuild().getOutputDirectory();
-        dependencyClasses.addAll( buildDependencyClasses( outputDirectory ) );
+        return buildDependencyClasses( outputDirectory );
+    }
 
+    private Set<String> buildTestDependencyClasses( MavenProject project )
+        throws IOException
+    {
         String testOutputDirectory = project.getBuild().getTestOutputDirectory();
-        dependencyClasses.addAll( buildDependencyClasses( testOutputDirectory ) );
-
-        return dependencyClasses;
+        return buildDependencyClasses( testOutputDirectory );
     }
 
     private Set<String> buildDependencyClasses( String path )
@@ -211,9 +235,8 @@ public class DefaultProjectDependencyAnalyzer
         return dependencyAnalyzer.analyze( url );
     }
 
-    protected Set<Artifact> buildDeclaredArtifacts( MavenProject project )
+    private static Set<Artifact> buildDeclaredArtifacts( MavenProject project )
     {
-        @SuppressWarnings( "unchecked" )
         Set<Artifact> declaredArtifacts = project.getDependencyArtifacts();
 
         if ( declaredArtifacts == null )
@@ -224,10 +247,10 @@ public class DefaultProjectDependencyAnalyzer
         return declaredArtifacts;
     }
 
-    protected Set<Artifact> buildUsedArtifacts( Map<Artifact, Set<String>> artifactClassMap,
-                                              Set<String> dependencyClasses )
+    private static Map<Artifact, Set<String>> buildUsedArtifacts( Map<Artifact, Set<String>> artifactClassMap,
+                                                                  Set<String> dependencyClasses )
     {
-        Set<Artifact> usedArtifacts = new HashSet<Artifact>();
+        Map<Artifact, Set<String>> usedArtifacts = new HashMap<>();
 
         for ( String className : dependencyClasses )
         {
@@ -235,14 +258,20 @@ public class DefaultProjectDependencyAnalyzer
 
             if ( artifact != null )
             {
-                usedArtifacts.add( artifact );
+                Set<String> classesFromArtifact = usedArtifacts.get( artifact );
+                if ( classesFromArtifact == null )
+                {
+                    classesFromArtifact = new HashSet<String>();
+                    usedArtifacts.put( artifact, classesFromArtifact );
+                }
+                classesFromArtifact.add( className );
             }
         }
 
         return usedArtifacts;
     }
 
-    protected Artifact findArtifactForClassName( Map<Artifact, Set<String>> artifactClassMap, String className )
+    private static Artifact findArtifactForClassName( Map<Artifact, Set<String>> artifactClassMap, String className )
     {
         for ( Map.Entry<Artifact, Set<String>> entry : artifactClassMap.entrySet() )
         {
