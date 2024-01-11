@@ -19,24 +19,36 @@ package org.apache.maven.shared.dependency.analyzer.asm;
  * under the License.
  */
 
-import org.objectweb.asm.Type;
-
 import java.util.HashSet;
 import java.util.Set;
 
+import org.objectweb.asm.Type;
+
 /**
+ * <p>ResultCollector class.</p>
+ *
  * @author Kristian Rosenvold
  */
 public class ResultCollector
 {
 
-    private final Set<String> classes = new HashSet<String>();
+    private final Set<String> classes = new HashSet<>();
 
+    /**
+     * <p>getDependencies.</p>
+     *
+     * @return a {@link java.util.Set} object.
+     */
     public Set<String> getDependencies()
     {
         return classes;
     }
 
+    /**
+     * <p>addName.</p>
+     *
+     * @param name a {@link java.lang.String} object.
+     */
     public void addName( String name )
     {
         if ( name == null )
@@ -45,15 +57,24 @@ public class ResultCollector
         }
 
         // decode arrays
-        if ( name.startsWith( "[L" ) && name.endsWith( ";" ) )
+        if ( name.charAt( 0 ) == '[' )
         {
-            name = name.substring( 2, name.length() - 1 );
+            int i = 0;
+            do
+            {
+                ++i;
+            }
+            while ( name.charAt( i ) == '[' ); // could have array of array ...
+            if ( name.charAt( i ) != 'L' )
+            {
+                // ignore array of scalar types
+                return;
+            }
+            name = name.substring( i + 1, name.length() - 1 );
         }
 
         // decode internal representation
-        name = name.replace( '/', '.' );
-
-        classes.add( name );
+        add( name.replace( '/', '.' ) );
     }
 
     void addDesc( final String desc )
@@ -70,16 +91,25 @@ public class ResultCollector
                 break;
 
             case Type.OBJECT:
-                addName( t.getClassName().replace( '.', '/' ) );
+                addName( t.getClassName() );
                 break;
 
             default:
         }
     }
 
+    /**
+     * <p>add.</p>
+     *
+     * @param name a {@link java.lang.String} object.
+     */
     public void add( String name )
     {
-        classes.add( name );
+        // inner classes have equivalent compilation requirement as container class
+        if ( name.indexOf( '$' ) < 0 )
+        {
+            classes.add( name );
+        }
     }
 
     void addNames( final String[] names )

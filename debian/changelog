@@ -1,3 +1,15 @@
+maven-dependency-analyzer (1.13.0-1) unstable; urgency=medium
+
+  * Team upload.
+  * New upstream release
+    - New dependency on libassertj-core-java
+    - Removed the patch
+  * Depend on libmaven-parent-java
+  * Standards-Version updated to 4.6.2
+  * Switch to debhelper level 13
+
+ -- Emmanuel Bourg <ebourg@apache.org>  Mon, 09 Jan 2023 17:18:22 +0100
+
 maven-dependency-analyzer (1.11.1-1) unstable; urgency=medium
 
   * Team upload.

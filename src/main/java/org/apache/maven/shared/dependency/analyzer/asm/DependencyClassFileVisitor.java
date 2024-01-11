@@ -19,7 +19,12 @@ package org.apache.maven.shared.dependency.analyzer.asm;
  * under the License.
  */
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Set;
+
 import org.apache.maven.shared.dependency.analyzer.ClassFileVisitor;
+import org.codehaus.plexus.util.IOUtil;
 import org.objectweb.asm.AnnotationVisitor;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
@@ -27,44 +32,34 @@ import org.objectweb.asm.FieldVisitor;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.signature.SignatureVisitor;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.Set;
-
 /**
  * Computes the set of classes referenced by visited class files, using
  * <a href="DependencyVisitor.html">DependencyVisitor</a>.
  *
  * @author <a href="mailto:markhobson@gmail.com">Mark Hobson</a>
- * @version $Id$
  * @see #getDependencies()
  */
 public class DependencyClassFileVisitor
     implements ClassFileVisitor
 {
-    // fields -----------------------------------------------------------------
-
     private final ResultCollector resultCollector = new ResultCollector();
 
-    // constructors -----------------------------------------------------------
-
+    /**
+     * <p>Constructor for DependencyClassFileVisitor.</p>
+     */
     public DependencyClassFileVisitor()
     {
     }
 
-    // ClassFileVisitor methods -----------------------------------------------
-
-    /*
-     * @see org.apache.maven.shared.dependency.analyzer.ClassFileVisitor#visitClass(java.lang.String,
-     *      java.io.InputStream)
-     */
+    /** {@inheritDoc} */
     public void visitClass( String className, InputStream in )
     {
         try
         {
-            ClassReader reader = new ClassReader( in );
+            byte[] byteCode = IOUtil.toByteArray( in );
+            ClassReader reader = new ClassReader( byteCode );
 
-            final Set<String> constantPoolClassRefs = ConstantPoolParser.getConstantPoolClassReferences( reader.b );
+            final Set<String> constantPoolClassRefs = ConstantPoolParser.getConstantPoolClassReferences( byteCode );
             for ( String string : constantPoolClassRefs )
             {
                 resultCollector.addName( string );
@@ -91,9 +86,9 @@ public class DependencyClassFileVisitor
         }
     }
 
-    // public methods ---------------------------------------------------------
-
     /**
+     * <p>getDependencies.</p>
+     *
      * @return the set of classes referenced by visited class files
      */
     public Set<String> getDependencies()
